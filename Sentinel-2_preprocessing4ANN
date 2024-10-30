@@ -1,71 +1,53 @@
 import shapefile
 from shapely.geometry import shape, box
 import os
-from pykml.factory import KML_ElementMaker as KML
-from lxml import etree
+from shutil import copyfile
 
-def calculate_bounding_rectangle(input_file, output_format='shp'):
+def calculate_bounding_rectangles(input_file):
     """
-    Reads an input SHP file, calculates the bounding rectangle
-    for the input polygons, and writes the result to an output file
-    in the specified format (SHP or KML).
+    Reads an input SHP file containing polygons, calculates the bounding rectangles
+    for each polygon, and writes the result to an output SHP file with the same name
+    (appending '_squared' to the name) in the same directory, including prj and cpg files.
 
     Parameters:
     input_file (str): Path to the input SHP file.
-    output_format (str): Desired output format ('shp' or 'kml').
 
     Returns:
-    str: Path to the output vector file.
+    str: Path to the output SHP file.
     """
     
     base, ext = os.path.splitext(input_file)
-    output_file = f"{base}_squared.{output_format}"
+    output_file = f"{base}_squared{ext}"
     
     if ext.lower() != '.shp':
         raise ValueError("Input file must be a SHP file.")
     
     reader = shapefile.Reader(input_file)
-    bounding_rects = []
+    writer = shapefile.Writer(output_file, shapeType=shapefile.POLYGON)
+    writer.fields = reader.fields[1:]
 
     for sr in reader.iterShapeRecords():
         geom = shape(sr.shape.__geo_interface__)
         minx, miny, maxx, maxy = geom.bounds
         bounding_rect = box(minx, miny, maxx, maxy)
-        bounding_rects.append((bounding_rect, sr.record))
+        writer.record(*sr.record)
+        writer.shape(bounding_rect)
+    writer.close()
+
+    # Copy .prj and .cpg files
+    prj_input = f"{base}.prj"
+    prj_output = f"{base}_squared.prj"
+    if os.path.exists(prj_input):
+        copyfile(prj_input, prj_output)
     
-    if output_format == 'shp':
-        writer = shapefile.Writer(output_file, shapeType=shapefile.POLYGON)
-        writer.fields = reader.fields[1:]
-        for bbox, record in bounding_rects:
-            writer.record(*record)
-            writer.shape(bbox)
-        writer.close()
-    elif output_format == 'kml':
-        kml_doc = KML.kml(
-            KML.Document(
-                *[KML.Placemark(
-                    KML.Polygon(
-                        KML.outerBoundaryIs(
-                            KML.LinearRing(
-                                KML.coordinates(
-                                    " ".join([f"{coord[0]},{coord[1]},0" for coord in bbox.exterior.coords])
-                                )
-                            )
-                        )
-                    ),
-                    KML.name(f"Bounding Box {i}")
-                ) for i, (bbox, _) in enumerate(bounding_rects)]
-            )
-        )
-        with open(output_file, 'wb') as file:
-            file.write(etree.tostring(kml_doc, pretty_print=True))
-    else:
-        raise ValueError("Output format must be 'shp' or 'kml'.")
+    cpg_input = f"{base}.cpg"
+    cpg_output = f"{base}_squared.cpg"
+    if os.path.exists(cpg_input):
+        copyfile(cpg_input, cpg_output)
     
     return output_file
 
 # Esempio di utilizzo
 input_file = 'path/to/input_file.shp'
-output_format = 'kml'  # o 'shp'
-output_file = calculate_bounding_rectangle(input_file, output_format)
+output_file = calculate_bounding_rectangles(input_file)
 print(f"File di output generato: {output_file}")
