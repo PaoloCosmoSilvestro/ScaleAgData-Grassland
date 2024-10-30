@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Oct 30 11:44:59 2024
+Project: ScaleAgData
+WP5: Grassland RILab
+Task: Model for RECO and GPP estimation using EO data  
+@author: Paolo Cosmo Silvestro
+"""
 import shapefile
 from shapely.geometry import shape, box
 import os
@@ -86,7 +94,7 @@ def get_sentinel2_images(kml_file, start_date, end_date, data_type, cloud_cover=
     }
     
     # Make the API request
-    response = requests.get(base_url, params=params, auth=("pxxxxxxxxx@gmail.com", "Alxxxxxxx23?"))
+    response = requests.get(base_url, params=params, auth=("paolocosmo.silvestro@gmail.com", "Alessandro2023?"))
     data = response.json()
     
     # Parse the response to extract the required information
@@ -102,11 +110,13 @@ def get_sentinel2_images(kml_file, start_date, end_date, data_type, cloud_cover=
     return results
 
 # Esempio di utilizzo
-kml_file = r'G:\My Drive\Projects\ScaleAgData\RI LAB grassaland\RiLabGrassland_Shared\Scripts\ANNmodel_RECO_GPP\Input\footprint_MOR_CopernicusCatIn.kml'
+kml_file = r'G:\My Drive\Projects\ScaleAgData\RI LAB grassaland\RiLabGrassland_Shared\Scripts\ANNmodel_RECO_GPP\Input\footprint_MOR_CopernicusCatIn.geojson'
 start_date = '2020-09-30'
 end_date = '2020-10-31'
 data_type = 'Level2A'
 cloud_cover = 20
 images = get_sentinel2_images(kml_file, start_date, end_date, data_type, cloud_cover)
+for image in images:
+    print(image)
 for image in images:
     print(image)
