@@ -56,7 +56,7 @@ def calculate_bounding_rectangle(input_file):
     
     return output_file
 
-# Example usage
+# Esempio di utilizzo
 input_file = 'path/to/input_file.kml'  # or .shp
 output_file = calculate_bounding_rectangle(input_file)
 print(f"File di output generato: {output_file}")
