@@ -2,6 +2,9 @@ import shapefile
 from shapely.geometry import shape, box
 import os
 from shutil import copyfile
+import requests
+from pykml import parser
+# from datetime import datetime
 
 def calculate_bounding_rectangles(input_file):
     """
@@ -47,7 +50,63 @@ def calculate_bounding_rectangles(input_file):
     
     return output_file
 
+
+def get_sentinel2_images(kml_file, start_date, end_date, data_type, cloud_cover=20):
+    """
+    Fetches Sentinel-2 images from the Copernicus catalog based on the input parameters.
+
+    Parameters:
+    kml_file (str): Path to the KML file.
+    start_date (str): Start date in 'YYYY-MM-DD' format.
+    end_date (str): End date in 'YYYY-MM-DD' format.
+    data_type (str): Data type (Level1C or Level2A).
+    cloud_cover (int): Maximum cloud cover percentage (default is 20%).
+
+    Returns:
+    list: List of dictionaries containing the date, file name, and Product ID.
+    """
+    
+    # Parse the KML file to extract AOI
+    with open(kml_file, 'r') as file:
+        root = parser.parse(file).getroot()
+    
+    ns = {'kml': 'http://www.opengis.net/kml/2.2'}
+    placemark = root.find('.//kml:Placemark', ns)
+    polygon = placemark.find('.//kml:Polygon', ns)
+    outer_boundary = polygon.find('.//kml:outerBoundaryIs/kml:LinearRing/kml:coordinates', ns)
+    coords = outer_boundary.text.strip().split()
+    aoi = "POLYGON((" + ",".join([f"{coord.split(',')[0]} {coord.split(',')[1]}" for coord in coords]) + "))"
+    
+    # Set up the API request parameters
+    base_url = "https://scihub.copernicus.eu/dhus/search"
+    params = {
+        'q': f"footprint:\"Intersects({aoi})\" AND beginPosition:[{start_date}T00:00:00.000Z TO {end_date}T23:59:59.999Z] AND platformname:Sentinel-2 AND producttype:{data_type} AND cloudcoverpercentage:[0 TO {cloud_cover}]",
+        'format': 'json',
+        'rows': 100
+    }
+    
+    # Make the API request
+    response = requests.get(base_url, params=params, auth=("pxxxxxxxxx@gmail.com", "Alxxxxxxx23?"))
+    data = response.json()
+    
+    # Parse the response to extract the required information
+    results = []
+    for entry in data['feed']['entry']:
+        result = {
+            'date': entry['date'][0]['content'],
+            'file_name': entry['title'],
+            'product_id': f"https://zipper.dataspace.copernicus.eu/odata/v1/Products({entry['id']})/$value"
+        }
+        results.append(result)
+    
+    return results
+
 # Esempio di utilizzo
-input_file = 'path/to/input_file.shp'
-output_file = calculate_bounding_rectangles(input_file)
-print(f"File di output generato: {output_file}")
+kml_file = r'G:\My Drive\Projects\ScaleAgData\RI LAB grassaland\RiLabGrassland_Shared\Scripts\ANNmodel_RECO_GPP\Input\footprint_MOR_CopernicusCatIn.kml'
+start_date = '2020-09-30'
+end_date = '2020-10-31'
+data_type = 'Level2A'
+cloud_cover = 20
+images = get_sentinel2_images(kml_file, start_date, end_date, data_type, cloud_cover)
+for image in images:
+    print(image)
