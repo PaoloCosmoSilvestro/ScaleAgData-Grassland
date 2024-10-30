@@ -1,62 +1,71 @@
 import shapefile
-from shapely.geometry import shape, box, Polygon
+from shapely.geometry import shape, box
 import os
-from pykml import parser
+from pykml.factory import KML_ElementMaker as KML
 from lxml import etree
 
-def calculate_bounding_rectangle(input_file):
+def calculate_bounding_rectangle(input_file, output_format='shp'):
     """
-    Reads an input vector file (KML or SHP), calculates the bounding rectangle
-    for the input polygons, and writes the result to an output file in the same format.
+    Reads an input SHP file, calculates the bounding rectangle
+    for the input polygons, and writes the result to an output file
+    in the specified format (SHP or KML).
 
     Parameters:
-    input_file (str): Path to the input vector file.
+    input_file (str): Path to the input SHP file.
+    output_format (str): Desired output format ('shp' or 'kml').
 
     Returns:
     str: Path to the output vector file.
     """
     
     base, ext = os.path.splitext(input_file)
-    output_file = f"{base}_squared{ext}"
+    output_file = f"{base}_squared.{output_format}"
     
-    if ext.lower() == '.shp':
-        reader = shapefile.Reader(input_file)
+    if ext.lower() != '.shp':
+        raise ValueError("Input file must be a SHP file.")
+    
+    reader = shapefile.Reader(input_file)
+    bounding_rects = []
+
+    for sr in reader.iterShapeRecords():
+        geom = shape(sr.shape.__geo_interface__)
+        minx, miny, maxx, maxy = geom.bounds
+        bounding_rect = box(minx, miny, maxx, maxy)
+        bounding_rects.append((bounding_rect, sr.record))
+    
+    if output_format == 'shp':
         writer = shapefile.Writer(output_file, shapeType=shapefile.POLYGON)
         writer.fields = reader.fields[1:]
-
-        for sr in reader.iterShapeRecords():
-            geom = shape(sr.shape.__geo_interface__)
-            minx, miny, maxx, maxy = geom.bounds
-            bounding_rect = box(minx, miny, maxx, maxy)
-            writer.record(*sr.record)
-            writer.shape(bounding_rect)
+        for bbox, record in bounding_rects:
+            writer.record(*record)
+            writer.shape(bbox)
         writer.close()
-    
-    elif ext.lower() == '.kml':
-        with open(input_file, 'r') as file:
-            root = parser.parse(file).getroot()
-        
-        ns = {'kml': 'http://www.opengis.net/kml/2.2'}
-        placemarks = root.findall('.//kml:Placemark', ns)
-        
-        for placemark in placemarks:
-            polygon = placemark.find('.//kml:Polygon', ns)
-            if polygon is not None:
-                outer_boundary = polygon.find('.//kml:outerBoundaryIs/kml:LinearRing/kml:coordinates', ns)
-                coords = outer_boundary.text.strip().split()
-                points = [tuple(map(float, coord.split(','))) for coord in coords]
-                geom = Polygon(points)
-                minx, miny, maxx, maxy = geom.bounds
-                bounding_rect = box(minx, miny, maxx, maxy)
-                new_coords = " ".join([f"{coord[0]},{coord[1]},0" for coord in bounding_rect.exterior.coords])
-                outer_boundary.text = new_coords
-
+    elif output_format == 'kml':
+        kml_doc = KML.kml(
+            KML.Document(
+                *[KML.Placemark(
+                    KML.Polygon(
+                        KML.outerBoundaryIs(
+                            KML.LinearRing(
+                                KML.coordinates(
+                                    " ".join([f"{coord[0]},{coord[1]},0" for coord in bbox.exterior.coords])
+                                )
+                            )
+                        )
+                    ),
+                    KML.name(f"Bounding Box {i}")
+                ) for i, (bbox, _) in enumerate(bounding_rects)]
+            )
+        )
         with open(output_file, 'wb') as file:
-            file.write(etree.tostring(root, pretty_print=True))
+            file.write(etree.tostring(kml_doc, pretty_print=True))
+    else:
+        raise ValueError("Output format must be 'shp' or 'kml'.")
     
     return output_file
 
 # Esempio di utilizzo
-input_file = 'path/to/input_file.kml'  # or .shp
-output_file = calculate_bounding_rectangle(input_file)
+input_file = 'path/to/input_file.shp'
+output_format = 'kml'  # o 'shp'
+output_file = calculate_bounding_rectangle(input_file, output_format)
 print(f"File di output generato: {output_file}")
