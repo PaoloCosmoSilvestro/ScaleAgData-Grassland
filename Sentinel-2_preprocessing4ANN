@@ -17,7 +17,7 @@ from rasterio.features import geometry_mask
 import rasterio
 # import numpy as np
 import pyproj
-from xml.etree import ElementTree as ET
+# from xml.etree import ElementTree as ET
 
 def fetch_satellite_data(start_date, end_date, data_collection, aoi):
     response = requests.get(
@@ -138,20 +138,21 @@ def check_and_update_path(inputpath):
     else:
         return outpath, f"the folders {existing_dirs[0]}, {existing_dirs[1]} and {existing_dirs[2]} are present"
 
-def get_cloud_coverage(safe_dir):
-    metadata_path = os.path.join(safe_dir, 'MTD_MSIL2A.xml')
-    if not os.path.exists(metadata_path):
-        print("Metadata file not found.")
-        return None
+# def get_cloud_coverage(safe_dir):
+#     metadata_path = os.path.join(safe_dir, 'MTD_MSIL2A.xml')
+#     if not os.path.exists(metadata_path):
+#         print("Metadata file not found.")
+#         return None
 
-    tree = ET.parse(metadata_path)
-    root = tree.getroot()
+#     tree = ET.parse(metadata_path)
+#     root = tree.getroot()
 
-    # Cerca il tag relativo alla copertura nuvolosa
-    for elem in root.iter():
-        if 'CLOUDY_PIXEL_PERCENTAGE' in elem.tag:
-            return float(elem.text)
-    return None
+#     # Cerca il tag relativo alla copertura nuvolosa
+#     for elem in root.iter():
+#         if 'Cloud_Coverage_Assessment' in elem.tag:
+#             cloud_coverage = float(elem.text)
+#             return cloud_coverage
+#     return None
 
 def get_pixel_values(raster_path, aoi_wkt):
     # Load the raster
@@ -210,42 +211,108 @@ def get_pixel_values_with_expansion(raster_path, aoi_wkt, px_dim=10):
     
     return pixel_values
 
-def process_satellite_image(path, url, item, aoi_wkt,band='B02'):
-    # Step 1: Extract ID
+def create_result_dict(path, url, item, aoi_wkt,cldprb_value):
+    # Extract ID
     match = re.search(r'S2A_MSIL2A_[^\\]+\.SAFE', path)
-    if match:
-        ID = match.group(0)
-    else:
-        ID = None
-    
-    # Step 2: Prepare dictionary with basic attributes
+    ID = match.group(0) if match else None
+
+    # Prepare dictionary with basic attributes
     result = {
         'ID': ID,
         'link': url,
         'aoi': aoi_wkt,
         'ac_date': item[5].split('T')[0],
-        'ac_time': item[5].split('T')[1]
+        'ac_time': item[5].split('T')[1],
+        'cloud_prob': cldprb_value
     }
-    
-    # Step 3: Process raster data for B02
-    outpath = os.path.join(path, "R10m")
+    return result
+
+def add_band_to_result(result, path, aoi_wkt, band='B02', Res='R10m'):
+    outpath = os.path.join(path, Res)
     band_file = None
-    
+
     for file in os.listdir(outpath):
         if band in file:
             band_file = os.path.join(outpath, file)
             break
-    
+
     if band_file:
         points = get_pixel_values(band_file, aoi_wkt)
         if len(points) < 4:
-            points = get_pixel_values_with_expansion(band_file, aoi_wkt, px_dim=10)     
-              
+            points = get_pixel_values_with_expansion(band_file, aoi_wkt, px_dim=10)
+
         result[band] = points
+        result[band + '_av'] = int(sum(points) / len(points))
     else:
         result[band] = None
-    
+        result[band + '_av'] = None
+
     return result
+
+# def process_satellite_image(path, url, item, aoi_wkt, cldprb_value, Res='R10m' ,band='B02'):
+#         # Step 1: Extract ID
+#     match = re.search(r'S2A_MSIL2A_[^\\]+\.SAFE', path)
+#     if match:
+#         ID = match.group(0)
+#     else:
+#         ID = None
+    
+#     # Step 2: Prepare dictionary with basic attributes
+#     band_av = band + '_av'
+#     result = {
+#         'ID': ID,
+#         'link': url,
+#         'aoi': aoi_wkt,
+#         'ac_date': item[5].split('T')[0],
+#         'ac_time': item[5].split('T')[1],
+#         'cloud_prob': cldprb_value
+#     }
+    
+#     # Step 3: Process raster data for B02
+#     outpath = os.path.join(path, Res)
+#     band_file = None
+    
+#     for file in os.listdir(outpath):
+#         if band in file:
+#             band_file = os.path.join(outpath, file)
+#             break
+    
+#     if band_file:
+#         points = get_pixel_values(band_file, aoi_wkt)
+#         if len(points) < 4:
+#             points = get_pixel_values_with_expansion(band_file, aoi_wkt, px_dim=10)     
+              
+#         result[band] = points
+#         result[band_av] = int(sum(points) / len(points))
+#     else:
+#         result[band] = None
+#         result[band_av] = None
+    
+#     return result
+
+def create_new_path(img_data_path):
+    if not img_data_path.endswith('IMG_DATA'):
+        print("Il percorso non termina con 'IMG_DATA'.")
+        return None
+
+    new_path = img_data_path.replace('IMG_DATA', 'QI_DATA\\MSK_CLDPRB_20m.jp2')
+    return new_path
+def s2_band_resolution_list():
+    s2_resolution_pairs = [
+        ("B01", "R60m"),
+        ("B02", "R10m"),
+        ("B03", "R10m"),
+        ("B04", "R10m"),
+        ("B05", "R20m"),
+        ("B06", "R20m"),
+        ("B07", "R20m"),
+        ("B08", "R10m"),
+        ("B8A", "R20m"),
+        ("B09", "R60m"),
+        ("B11", "R20m"),
+        ("B12", "R20m"),
+    ]
+    return s2_resolution_pairs
 
 # Esempio di utilizzo
 
@@ -259,7 +326,7 @@ output_list = filter_output_list_by_datatype(output_list, datatype)
 
 
 #Test
-item = output_list[0]
+item = output_list[2]
 
 url = generate_url(item[1])
 access_token = get_access_token("paolocosmo.silvestro@gmail.com", "Alessandro2023?")
@@ -282,10 +349,12 @@ aoi_wkt = "POLYGON((-4.76764154430692 38.3618962903239, -4.76764154430692 38.362
 path = outpath_t
 
 # Esempio di utilizzo
-cloud_coverage = get_cloud_coverage(extract_folder)
+cloud_path = create_new_path(path)
+
+cldprb_points =  get_pixel_values(cloud_path, aoi_wkt)
+cldprb_value = sum(cldprb_points) / len(cldprb_points)
 
 
-
-result = process_satellite_image(path, url, item, aoi_wkt)
-
-raster_path = r'G:\My Drive\Python\PCSS_Scripts\Copernicus\S2A_MSIL2A_20201013T111021_N0214_R137_T30SUH_20201019T152308.SAFE\GRANULE\L2A_T30SUH_A027733_20201013T111451\IMG_DATA\R10m\T30SUH_20201013T111021_B02_10m.JP2'
+result = create_result_dict(path, url, item, aoi_wkt,cldprb_value)
+s2_resolution_pairs = s2_band_resolution_list()
+result = add_band_to_result(result, path, aoi_wkt, band='B02', Res='R10m')
