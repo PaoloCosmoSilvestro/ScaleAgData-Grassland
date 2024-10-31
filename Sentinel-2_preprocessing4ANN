@@ -1,122 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Oct 30 11:44:59 2024
-Project: ScaleAgData
-WP5: Grassland RILab
-Task: Model for RECO and GPP estimation using EO data  
-@author: Paolo Cosmo Silvestro
+Created on Wed Oct 30 18:30:02 2024
+
+@author: pcss
 """
-import shapefile
-from shapely.geometry import shape, box
-import os
-from shutil import copyfile
 import requests
-from pykml import parser
-# from datetime import datetime
+import pandas as pd
 
-def calculate_bounding_rectangles(input_file):
-    """
-    Reads an input SHP file containing polygons, calculates the bounding rectangles
-    for each polygon, and writes the result to an output SHP file with the same name
-    (appending '_squared' to the name) in the same directory, including prj and cpg files.
+start_date = "2020-09-30"
+end_date = "2020-10-31"
+data_collection = "SENTINEL-2"
+aoi = "POLYGON((4.220581 50.958859,4.521264 50.953236,4.545977 50.906064,4.541858 50.802029,4.489685 50.763825,4.23843 50.767734,4.192435 50.806369,4.189689 50.907363,4.220581 50.958859))'"
 
-    Parameters:
-    input_file (str): Path to the input SHP file.
+json = requests.get(
+    f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq '{data_collection}' and OData.CSC.Intersects(area=geography'SRID=4326;{aoi}) and ContentDate/Start gt {start_date}T00:00:00.000Z and ContentDate/Start lt {end_date}T00:00:00.000Z"
+).json()
 
-    Returns:
-    str: Path to the output SHP file.
-    """
-    
-    base, ext = os.path.splitext(input_file)
-    output_file = f"{base}_squared{ext}"
-    
-    if ext.lower() != '.shp':
-        raise ValueError("Input file must be a SHP file.")
-    
-    reader = shapefile.Reader(input_file)
-    writer = shapefile.Writer(output_file, shapeType=shapefile.POLYGON)
-    writer.fields = reader.fields[1:]
+output_list = pd.DataFrame.from_dict(json["value"]).head(50).values.tolist()
 
-    for sr in reader.iterShapeRecords():
-        geom = shape(sr.shape.__geo_interface__)
-        minx, miny, maxx, maxy = geom.bounds
-        bounding_rect = box(minx, miny, maxx, maxy)
-        writer.record(*sr.record)
-        writer.shape(bounding_rect)
-    writer.close()
-
-    # Copy .prj and .cpg files
-    prj_input = f"{base}.prj"
-    prj_output = f"{base}_squared.prj"
-    if os.path.exists(prj_input):
-        copyfile(prj_input, prj_output)
-    
-    cpg_input = f"{base}.cpg"
-    cpg_output = f"{base}_squared.cpg"
-    if os.path.exists(cpg_input):
-        copyfile(cpg_input, cpg_output)
-    
-    return output_file
-
-
-def get_sentinel2_images(kml_file, start_date, end_date, data_type, cloud_cover=20):
-    """
-    Fetches Sentinel-2 images from the Copernicus catalog based on the input parameters.
-
-    Parameters:
-    kml_file (str): Path to the KML file.
-    start_date (str): Start date in 'YYYY-MM-DD' format.
-    end_date (str): End date in 'YYYY-MM-DD' format.
-    data_type (str): Data type (Level1C or Level2A).
-    cloud_cover (int): Maximum cloud cover percentage (default is 20%).
-
-    Returns:
-    list: List of dictionaries containing the date, file name, and Product ID.
-    """
-    
-    # Parse the KML file to extract AOI
-    with open(kml_file, 'r') as file:
-        root = parser.parse(file).getroot()
-    
-    ns = {'kml': 'http://www.opengis.net/kml/2.2'}
-    placemark = root.find('.//kml:Placemark', ns)
-    polygon = placemark.find('.//kml:Polygon', ns)
-    outer_boundary = polygon.find('.//kml:outerBoundaryIs/kml:LinearRing/kml:coordinates', ns)
-    coords = outer_boundary.text.strip().split()
-    aoi = "POLYGON((" + ",".join([f"{coord.split(',')[0]} {coord.split(',')[1]}" for coord in coords]) + "))"
-    
-    # Set up the API request parameters
-    base_url = "https://scihub.copernicus.eu/dhus/search"
-    params = {
-        'q': f"footprint:\"Intersects({aoi})\" AND beginPosition:[{start_date}T00:00:00.000Z TO {end_date}T23:59:59.999Z] AND platformname:Sentinel-2 AND producttype:{data_type} AND cloudcoverpercentage:[0 TO {cloud_cover}]",
-        'format': 'json',
-        'rows': 100
-    }
-    
-    # Make the API request
-    response = requests.get(base_url, params=params, auth=("paolocosmo.silvestro@gmail.com", "Alessandro2023?"))
-    data = response.json()
-    
-    # Parse the response to extract the required information
-    results = []
-    for entry in data['feed']['entry']:
-        result = {
-            'date': entry['date'][0]['content'],
-            'file_name': entry['title'],
-            'product_id': f"https://zipper.dataspace.copernicus.eu/odata/v1/Products({entry['id']})/$value"
-        }
-        results.append(result)
-    
-    return results
-
-# Esempio di utilizzo
-kml_file = r'G:\My Drive\Projects\ScaleAgData\RI LAB grassaland\RiLabGrassland_Shared\Scripts\ANNmodel_RECO_GPP\Input\footprint_MOR_CopernicusCatIn.geojson'
-start_date = '2020-09-30'
-end_date = '2020-10-31'
-data_type = 'Level2A'
-cloud_cover = 20
-images = get_sentinel2_images(kml_file, start_date, end_date, data_type, cloud_cover)
-for image in images:
-    print(image)
-for image in images:
-    print(image)
+# Visualizza l'output
+for item in output_list:
+    print(item)
