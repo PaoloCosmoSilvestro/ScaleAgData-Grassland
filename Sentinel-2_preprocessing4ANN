@@ -4,20 +4,288 @@ Created on Wed Oct 30 18:30:02 2024
 
 @author: pcss
 """
+
 import requests
 import pandas as pd
+import zipfile
+import os
+import re
+from shapely import wkt
+from shapely.ops import transform
+from rasterio.features import geometry_mask
+# from rasterio.mask import mask
+import rasterio
+# import numpy as np
+import pyproj
+from xml.etree import ElementTree as ET
+
+def fetch_satellite_data(start_date, end_date, data_collection, aoi):
+    response = requests.get(
+        f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq '{data_collection}' and OData.CSC.Intersects(area=geography'SRID=4326;{aoi}) and ContentDate/Start gt {start_date}T00:00:00.000Z and ContentDate/Start lt {end_date}T00:00:00.000Z"
+    )
+    
+    try:
+        json_data = response.json()
+        output_list = pd.DataFrame.from_dict(json_data["value"]).head(50).values.tolist()
+    except KeyError:
+        print("Errore: 'value' non trovato nella risposta JSON.")
+        output_list = []
+    
+    return output_list
+
+def filter_output_list_by_datatype(output_list, datatype):
+    """
+    Filtra la lista output_list in base al valore specificato di datatype.
+    
+    Parameters:
+    - output_list: Lista di liste, dove ogni lista contiene gli elementi.
+    - datatype: Stringa da cercare immediatamente dopo 'MSI' nell'elemento con indice [2].
+    
+    Returns:
+    - Lista filtrata contenente solo gli elementi che soddisfano il criterio.
+    """
+    filtered_list = [
+        item for item in output_list 
+        if 'MSI' + datatype in item[2]
+    ]
+    return filtered_list    
+
+def generate_url(input_string):
+    """
+    Genera una URL basata sulla stringa di input fornita.
+    
+    Parameters:
+    - input_string: La stringa di input da inserire nella URL.
+    
+    Returns:
+    - La URL generata con la stringa di input inclusa.
+    """
+    return f"https://zipper.dataspace.copernicus.eu/odata/v1/Products({input_string})/$value"
+
+def get_access_token(username: str, password: str) -> str:
+    data = {
+        "client_id": "cdse-public",
+        "username": username,
+        "password": password,
+        "grant_type": "password",
+    }
+    try:
+        r = requests.post(
+            "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token",
+            data=data,
+        )
+        r.raise_for_status()
+    except Exception:
+        raise Exception(
+            f"Access token creation failed. Reponse from the server was: {r.json()}"
+        )
+    return r.json()["access_token"]
+
+def download_file(access_token, url, output_name):
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    session = requests.Session()
+    session.headers.update(headers)
+    response = session.get(url, headers=headers, stream=True)
+
+    with open(output_name, "wb") as file:
+        for chunk in response.iter_content(chunk_size=8192):
+            if chunk:
+                file.write(chunk)
+
+
+def extract_and_remove_zip(zip_path, extract_to):
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_to)
+            
+            # Ottieni il primo livello di cartelle estratte
+            extracted_items = zip_ref.namelist()
+            root_folder = os.path.commonpath(extracted_items)
+            extracted_folder = os.path.join(extract_to, root_folder)
+        
+        os.remove(zip_path)
+        
+        # Restituisci il percorso della cartella estratta
+        return extracted_folder
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+
+def check_and_update_path(inputpath):
+    outpath = os.path.join(inputpath, "GRANULE")
+    if not os.path.exists(outpath):
+        return outpath, "outpath does not exist"
+    
+    subdirs = [d for d in os.listdir(outpath) if os.path.isdir(os.path.join(outpath, d))]
+    if not subdirs:
+        return outpath, "outpath is empty"
+    
+    outpath = os.path.join(outpath, subdirs[0], "IMG_DATA")
+    if not os.path.exists(outpath):
+        return outpath, "outpath does not exist"
+    
+    required_dirs = ["R10m", "R20m", "R60m"]
+    existing_dirs = [d for d in required_dirs if os.path.exists(os.path.join(outpath, d))]
+    
+    if not existing_dirs:
+        return outpath, "outpath is empty"
+    
+    if len(existing_dirs) == 1:
+        return outpath, f"the folder {existing_dirs[0]} is present"
+    elif len(existing_dirs) == 2:
+        return outpath, f"the folders {existing_dirs[0]} and {existing_dirs[1]} are present"
+    else:
+        return outpath, f"the folders {existing_dirs[0]}, {existing_dirs[1]} and {existing_dirs[2]} are present"
+
+def get_cloud_coverage(safe_dir):
+    metadata_path = os.path.join(safe_dir, 'MTD_MSIL2A.xml')
+    if not os.path.exists(metadata_path):
+        print("Metadata file not found.")
+        return None
+
+    tree = ET.parse(metadata_path)
+    root = tree.getroot()
+
+    # Cerca il tag relativo alla copertura nuvolosa
+    for elem in root.iter():
+        if 'CLOUDY_PIXEL_PERCENTAGE' in elem.tag:
+            return float(elem.text)
+    return None
+
+def get_pixel_values(raster_path, aoi_wkt):
+    # Load the raster
+    with rasterio.open(raster_path) as src:
+        # Read the CRS of the raster
+        raster_crs = src.crs
+        
+        # Parse the AOI (which is in WGS 84)
+        aoi = wkt.loads(aoi_wkt)
+        
+        # Define a projection transformer from WGS 84 to the raster's CRS
+        project = pyproj.Transformer.from_crs(pyproj.CRS('EPSG:4326'), raster_crs, always_xy=True).transform
+        
+        # Transform the AOI to the raster's CRS
+        aoi_transformed = transform(project, aoi)
+        geoms = [aoi_transformed]
+        
+        # Create a geometry mask for the raster
+        mask = geometry_mask(geoms, transform=src.transform, invert=True, out_shape=(src.height, src.width))
+        
+        # Read the raster data
+        data = src.read(1)
+        
+        # Extract the pixel values touched by the AOI
+        pixel_values = data[mask]
+    
+    return pixel_values
+
+def get_pixel_values_with_expansion(raster_path, aoi_wkt, px_dim=10):
+    # Load the raster
+    with rasterio.open(raster_path) as src:
+        # Read the CRS of the raster
+        raster_crs = src.crs
+        
+        # Parse the AOI (which is in WGS 84)
+        aoi = wkt.loads(aoi_wkt)
+        
+        # Define a projection transformer from WGS 84 to the raster's CRS
+        project = pyproj.Transformer.from_crs(pyproj.CRS('EPSG:4326'), raster_crs, always_xy=True).transform
+        
+        # Transform the AOI to the raster's CRS
+        aoi_transformed = transform(project, aoi)
+        
+        # Expand the AOI by px_dim meters in all directions
+        expanded_aoi = aoi_transformed.buffer(px_dim)
+        geoms = [expanded_aoi]
+        
+        # Create a geometry mask for the raster
+        mask = geometry_mask(geoms, transform=src.transform, invert=True, out_shape=(src.height, src.width))
+        
+        # Read the raster data
+        data = src.read(1)
+        
+        # Extract the pixel values touched by the AOI
+        pixel_values = data[mask]
+    
+    return pixel_values
+
+def process_satellite_image(path, url, item, aoi_wkt,band='B02'):
+    # Step 1: Extract ID
+    match = re.search(r'S2A_MSIL2A_[^\\]+\.SAFE', path)
+    if match:
+        ID = match.group(0)
+    else:
+        ID = None
+    
+    # Step 2: Prepare dictionary with basic attributes
+    result = {
+        'ID': ID,
+        'link': url,
+        'aoi': aoi_wkt,
+        'ac_date': item[5].split('T')[0],
+        'ac_time': item[5].split('T')[1]
+    }
+    
+    # Step 3: Process raster data for B02
+    outpath = os.path.join(path, "R10m")
+    band_file = None
+    
+    for file in os.listdir(outpath):
+        if band in file:
+            band_file = os.path.join(outpath, file)
+            break
+    
+    if band_file:
+        points = get_pixel_values(band_file, aoi_wkt)
+        if len(points) < 4:
+            points = get_pixel_values_with_expansion(band_file, aoi_wkt, px_dim=10)     
+              
+        result[band] = points
+    else:
+        result[band] = None
+    
+    return result
+
+# Esempio di utilizzo
 
 start_date = "2020-09-30"
 end_date = "2020-10-31"
 data_collection = "SENTINEL-2"
-aoi = "POLYGON((4.220581 50.958859,4.521264 50.953236,4.545977 50.906064,4.541858 50.802029,4.489685 50.763825,4.23843 50.767734,4.192435 50.806369,4.189689 50.907363,4.220581 50.958859))'"
+aoi = "POLYGON((-4.78305154699348 38.349247670976325, -4.78305154699348 38.37625826438388, -4.752389021711286 38.37625826438388, -4.752389021711286 38.349247670976325, -4.78305154699348 38.349247670976325))'"
+datatype = 'L2A'
+output_list = fetch_satellite_data(start_date, end_date, data_collection, aoi)
+output_list = filter_output_list_by_datatype(output_list, datatype)
 
-json = requests.get(
-    f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name eq '{data_collection}' and OData.CSC.Intersects(area=geography'SRID=4326;{aoi}) and ContentDate/Start gt {start_date}T00:00:00.000Z and ContentDate/Start lt {end_date}T00:00:00.000Z"
-).json()
 
-output_list = pd.DataFrame.from_dict(json["value"]).head(50).values.tolist()
+#Test
+item = output_list[0]
 
-# Visualizza l'output
-for item in output_list:
-    print(item)
+url = generate_url(item[1])
+access_token = get_access_token("paolocosmo.silvestro@gmail.com", "Alessandro2023?")
+output_name = "product.zip"
+
+download_file(access_token, url, output_name)
+
+zip_path = output_name
+extract_to = os.getcwd()
+extract_folder = extract_and_remove_zip(zip_path, extract_to)
+
+
+inputpath = extract_folder
+outpath_t, outcheck_t = check_and_update_path(inputpath)
+
+
+# Example usage
+
+aoi_wkt = "POLYGON((-4.76764154430692 38.3618962903239, -4.76764154430692 38.3621075912977, -4.7673322500241 38.3621075912977, -4.7673322500241 38.3618962903239, -4.76764154430692 38.3618962903239))"
+path = outpath_t
+
+# Esempio di utilizzo
+cloud_coverage = get_cloud_coverage(extract_folder)
+
+
+
+result = process_satellite_image(path, url, item, aoi_wkt)
+
+raster_path = r'G:\My Drive\Python\PCSS_Scripts\Copernicus\S2A_MSIL2A_20201013T111021_N0214_R137_T30SUH_20201019T152308.SAFE\GRANULE\L2A_T30SUH_A027733_20201013T111451\IMG_DATA\R10m\T30SUH_20201013T111021_B02_10m.JP2'
