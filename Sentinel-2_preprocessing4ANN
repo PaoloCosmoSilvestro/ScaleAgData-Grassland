@@ -239,7 +239,8 @@ def add_band_to_result(result, path, aoi_wkt, band='B02', Res='R10m'):
     if band_file:
         points = get_pixel_values(band_file, aoi_wkt)
         if len(points) < 4:
-            points = get_pixel_values_with_expansion(band_file, aoi_wkt, px_dim=10)
+            px_dim = int(Res[1:-1])
+            points = get_pixel_values_with_expansion(band_file, aoi_wkt, px_dim)
 
         result[band] = points
         result[band + '_av'] = int(sum(points) / len(points))
@@ -248,47 +249,6 @@ def add_band_to_result(result, path, aoi_wkt, band='B02', Res='R10m'):
         result[band + '_av'] = None
 
     return result
-
-# def process_satellite_image(path, url, item, aoi_wkt, cldprb_value, Res='R10m' ,band='B02'):
-#         # Step 1: Extract ID
-#     match = re.search(r'S2A_MSIL2A_[^\\]+\.SAFE', path)
-#     if match:
-#         ID = match.group(0)
-#     else:
-#         ID = None
-    
-#     # Step 2: Prepare dictionary with basic attributes
-#     band_av = band + '_av'
-#     result = {
-#         'ID': ID,
-#         'link': url,
-#         'aoi': aoi_wkt,
-#         'ac_date': item[5].split('T')[0],
-#         'ac_time': item[5].split('T')[1],
-#         'cloud_prob': cldprb_value
-#     }
-    
-#     # Step 3: Process raster data for B02
-#     outpath = os.path.join(path, Res)
-#     band_file = None
-    
-#     for file in os.listdir(outpath):
-#         if band in file:
-#             band_file = os.path.join(outpath, file)
-#             break
-    
-#     if band_file:
-#         points = get_pixel_values(band_file, aoi_wkt)
-#         if len(points) < 4:
-#             points = get_pixel_values_with_expansion(band_file, aoi_wkt, px_dim=10)     
-              
-#         result[band] = points
-#         result[band_av] = int(sum(points) / len(points))
-#     else:
-#         result[band] = None
-#         result[band_av] = None
-    
-#     return result
 
 def create_new_path(img_data_path):
     if not img_data_path.endswith('IMG_DATA'):
@@ -357,4 +317,6 @@ cldprb_value = sum(cldprb_points) / len(cldprb_points)
 
 result = create_result_dict(path, url, item, aoi_wkt,cldprb_value)
 s2_resolution_pairs = s2_band_resolution_list()
-result = add_band_to_result(result, path, aoi_wkt, band='B02', Res='R10m')
+
+for band, res in s2_resolution_pairs:
+    result = add_band_to_result(result, path, aoi_wkt, band=band, Res=res)
